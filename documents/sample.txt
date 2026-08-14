@@ -1,0 +1,15 @@
+Our DevOps platform uses Kubernetes for container orchestration.
+
+The Kubernetes cluster is running on MicroK8s.
+
+Jenkins is used for continuous integration.
+
+Argo CD is used for continuous deployment.
+
+PostgreSQL with pgvector is used as the vector database for the RAG application.
+
+Ollama runs the llama3.2:3b language model for generating answers.
+
+Prometheus and Grafana are used for monitoring.
+
+The application source code is stored in GitHub.

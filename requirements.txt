@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+psycopg2-binary
+pgvector
+numpy
+python-dotenv
+requests
+pydantic-settings
+httpx
+pytest
+sentence-transformers
