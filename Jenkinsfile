@@ -1,271 +1,414 @@
 pipeline {
 
-    agent any
+    agent {
+        kubernetes {
+
+            yaml '''
+apiVersion: v1
+kind: Pod
+
+spec:
+
+  containers:
+
+    # ==========================================
+    # Python container
+    # Used for application tests
+    # ==========================================
+
+    - name: python
+      image: python:3.12-slim
+      command:
+        - /bin/sh
+      tty: true
+
+
+    # ==========================================
+    # Kaniko container
+    # Used to build and push Docker image
+    # ==========================================
+
+    - name: kaniko
+      image: gcr.io/kaniko-project/executor:v1.23.2-debug
+      command:
+        - /busybox/cat
+      tty: true
+
+      volumeMounts:
+        - name: docker-config
+          mountPath: /kaniko/.docker
+
+
+    # ==========================================
+    # Git container
+    # Used to update GitOps repository
+    # ==========================================
+
+    - name: git
+      image: alpine/git:latest
+      command:
+        - /bin/sh
+      tty: true
+
+
+  volumes:
+
+    - name: docker-config
+      emptyDir: {}
+
+'''
+            defaultContainer 'python'
+        }
+    }
+
 
     environment {
 
-        // Docker image
         DOCKER_IMAGE = 'muskanpatel71198/postgres-rag-ollama'
 
-        // Jenkins automatically provides BUILD_NUMBER
         IMAGE_TAG = "${BUILD_NUMBER}"
 
-        // GitOps repository
-        GITOPS_REPO = 'https://github.com/muskan7860/postgres-rag-ollama-gitops.git'
-        GITOPS_BRANCH = 'main'
+        GITOPS_REPO =
+            'https://github.com/muskan7860/postgres-rag-ollama-gitops.git'
 
-        // GitHub username
-        GITHUB_USERNAME = 'muskan7860'
     }
+
 
     stages {
 
-        // =========================================================
-        // 1. CHECKOUT APPLICATION CODE
-        // =========================================================
+
+        // ============================================================
+        // STAGE 1
+        // CHECKOUT APPLICATION
+        // ============================================================
 
         stage('Checkout') {
 
             steps {
 
-                echo '========================================='
-                echo 'Checking out application source code'
-                echo '========================================='
+                echo '''
+==========================================
+CHECKOUT APPLICATION SOURCE CODE
+==========================================
+'''
 
                 checkout scm
             }
         }
 
 
-        // =========================================================
-        // 2. PYTHON TESTS
-        // =========================================================
+        // ============================================================
+        // STAGE 2
+        // PYTHON TESTS
+        // ============================================================
 
         stage('Python Tests') {
 
             steps {
 
-                echo '========================================='
-                echo 'Running Python tests'
-                echo '========================================='
+                container('python') {
 
-                sh '''
-                    set -e
-
-                    python3 -m venv .ci-venv
-
-                    . .ci-venv/bin/activate
-
-                    python -m pip install --upgrade pip
-
-                    pip install -r requirements.txt
-
-                    python -m pytest -v
-                '''
-            }
-        }
-
-
-        // =========================================================
-        // 3. DOCKER BUILD
-        // =========================================================
-
-        stage('Docker Build') {
-
-            steps {
-
-                echo '========================================='
-                echo "Building Docker image"
-                echo "Image: ${DOCKER_IMAGE}:${IMAGE_TAG}"
-                echo '========================================='
-
-                sh '''
-                    set -e
-
-                    docker build \
-                        -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
-                        -t ${DOCKER_IMAGE}:latest \
-                        .
-                '''
-            }
-        }
-
-
-        // =========================================================
-        // 4. DOCKER PUSH
-        // =========================================================
-
-        stage('Docker Push') {
-
-            steps {
-
-                echo '========================================='
-                echo 'Pushing Docker image to Docker Hub'
-                echo '========================================='
-
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'dockerhub-creds',
-                        usernameVariable: 'DOCKER_USERNAME',
-                        passwordVariable: 'DOCKER_PASSWORD'
-                    )
-                ]) {
+                    echo '''
+==========================================
+RUNNING PYTHON TESTS
+==========================================
+'''
 
                     sh '''
                         set -e
 
-                        echo "$DOCKER_PASSWORD" | docker login \
-                            -u "$DOCKER_USERNAME" \
-                            --password-stdin
+                        python --version
+                        pip --version
 
-                        docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+                        python -m pip install --upgrade pip
 
-                        docker push ${DOCKER_IMAGE}:latest
+                        pip install -r requirements.txt
 
-                        docker logout
+                        python -m pytest -v
                     '''
                 }
             }
         }
 
 
-        // =========================================================
-        // 5. UPDATE GITOPS REPOSITORY
-        // =========================================================
+        // ============================================================
+        // STAGE 3
+        // BUILD + PUSH DOCKER IMAGE USING KANIKO
+        // ============================================================
+
+        stage('Docker Build & Push') {
+
+            steps {
+
+                container('kaniko') {
+
+                    withCredentials([
+
+                        usernamePassword(
+
+                            credentialsId: 'dockerhub-creds',
+
+                            usernameVariable: 'DOCKER_USERNAME',
+
+                            passwordVariable: 'DOCKER_PASSWORD'
+                        )
+
+                    ]) {
+
+                        sh '''
+
+                            set -e
+
+                            echo "=========================================="
+                            echo "CREATING DOCKER HUB AUTHENTICATION"
+                            echo "=========================================="
+
+                            mkdir -p /kaniko/.docker
+
+
+                            AUTH=$(printf "%s:%s" \
+                              "$DOCKER_USERNAME" \
+                              "$DOCKER_PASSWORD" \
+                              | base64 \
+                              | tr -d '\\n')
+
+
+                            cat > /kaniko/.docker/config.json <<EOF
+{
+  "auths": {
+    "https://index.docker.io/v1/": {
+      "auth": "$AUTH"
+    }
+  }
+}
+EOF
+
+
+                            echo "=========================================="
+                            echo "BUILDING DOCKER IMAGE"
+                            echo "=========================================="
+
+
+                            /kaniko/executor \
+                              --context="$WORKSPACE" \
+                              --dockerfile="$WORKSPACE/Dockerfile" \
+                              --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
+
+
+                            echo "=========================================="
+                            echo "DOCKER IMAGE PUSHED"
+                            echo "=========================================="
+
+                            echo "Image:"
+                            echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
+
+                        '''
+                    }
+                }
+            }
+        }
+
+
+        // ============================================================
+        // STAGE 4
+        // UPDATE GITOPS REPOSITORY
+        // ============================================================
 
         stage('Update GitOps') {
 
             steps {
 
-                echo '========================================='
-                echo 'Updating GitOps repository'
-                echo "New image tag: ${IMAGE_TAG}"
-                echo '========================================='
+                container('git') {
 
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'github-creds',
-                        usernameVariable: 'GIT_USERNAME',
-                        passwordVariable: 'GIT_TOKEN'
-                    )
-                ]) {
+                    withCredentials([
 
-                    sh '''
-                        set -e
+                        usernamePassword(
 
-                        rm -rf gitops
+                            credentialsId: 'github-creds',
 
-                        git clone \
-                            -b ${GITOPS_BRANCH} \
-                            https://${GIT_USERNAME}:${GIT_TOKEN}@github.com/muskan7860/postgres-rag-ollama-gitops.git \
-                            gitops
+                            usernameVariable: 'GIT_USERNAME',
 
-                        cd gitops
+                            passwordVariable: 'GIT_TOKEN'
+                        )
 
-                        echo "Before update:"
-                        grep "image:" app-deployment.yaml || true
+                    ]) {
 
-                        echo "Updating Docker image tag..."
+                        sh '''
 
-                        sed -i \
-                            "s#image: ${DOCKER_IMAGE}:.*#image: ${DOCKER_IMAGE}:${IMAGE_TAG}#" \
-                            app-deployment.yaml
+                            set -e
 
-                        echo "After update:"
-                        grep "image:" app-deployment.yaml
 
-                        git config user.name "Jenkins CI"
+                            echo "=========================================="
+                            echo "CLONING GITOPS REPOSITORY"
+                            echo "=========================================="
 
-                        git config user.email "jenkins@localhost"
 
-                        git add app-deployment.yaml
+                            rm -rf postgres-rag-ollama-gitops
 
-                        git diff --cached
 
-                        git commit \
-                            -m "Update postgres-rag-ollama image to ${IMAGE_TAG}"
+                            git clone \
+                              https://$GIT_USERNAME:$GIT_TOKEN@github.com/muskan7860/postgres-rag-ollama-gitops.git \
+                              postgres-rag-ollama-gitops
 
-                        git push origin ${GITOPS_BRANCH}
-                    '''
+
+                            cd postgres-rag-ollama-gitops
+
+
+                            echo "=========================================="
+                            echo "CURRENT IMAGE"
+                            echo "=========================================="
+
+
+                            grep "image:" app-deployment.yaml || true
+
+
+                            echo "=========================================="
+                            echo "UPDATING IMAGE TAG"
+                            echo "=========================================="
+
+
+                            sed -i \
+                              "s|image: muskanpatel71198/postgres-rag-ollama:.*|image: muskanpatel71198/postgres-rag-ollama:$BUILD_NUMBER|g" \
+                              app-deployment.yaml
+
+
+                            echo "=========================================="
+                            echo "UPDATED IMAGE"
+                            echo "=========================================="
+
+
+                            grep "image:" app-deployment.yaml
+
+
+                            echo "=========================================="
+                            echo "GIT STATUS"
+                            echo "=========================================="
+
+
+                            git status
+
+
+                            git config user.name "Jenkins CI"
+
+                            git config user.email "jenkins@localhost"
+
+
+                            git add app-deployment.yaml
+
+
+                            git commit \
+                              -m "Update postgres-rag-ollama image to build $BUILD_NUMBER" \
+                              || echo "No changes to commit"
+
+
+                            git push origin main
+
+
+                            echo "=========================================="
+                            echo "GITOPS REPOSITORY UPDATED"
+                            echo "=========================================="
+
+                        '''
+                    }
                 }
             }
         }
     }
 
 
-    // =============================================================
+    // ================================================================
     // POST ACTIONS
-    // =============================================================
+    // ================================================================
 
     post {
 
-        // =========================================================
-        // SUCCESS
-        // =========================================================
 
         success {
 
-            echo '========================================='
-            echo 'CI/CD PIPELINE SUCCESS'
-            echo '========================================='
+            echo '''
+==========================================
+CI/CD PIPELINE SUCCESS
+==========================================
+
+Application tests passed.
+
+Docker image built and pushed.
+
+GitOps manifest updated.
+
+Argo CD will detect the Git change
+and synchronize Kubernetes.
+
+==========================================
+'''
+
 
             withCredentials([
+
                 string(
                     credentialsId: 'postgres-rag-ollama-slack',
                     variable: 'SLACK_WEBHOOK'
                 )
+
             ]) {
 
                 sh '''
+
                     curl -X POST \
-                        -H "Content-Type: application/json" \
-                        --data "{
-                            \\"text\\": \\"SUCCESS: postgres-rag-ollama #${BUILD_NUMBER}\\\\n\\\\nDocker Image: ${DOCKER_IMAGE}:${IMAGE_TAG}\\\\n\\\\nDocker image pushed successfully.\\\\nGitOps repository updated successfully.\\\\nArgo CD will detect the Git change and synchronize the application.\\\\n\\\\nBuild URL: ${BUILD_URL}\\"
-                        }" \
-                        "$SLACK_WEBHOOK"
+                      -H "Content-Type: application/json" \
+                      --data "{
+                        \\"text\\": \\"SUCCESS: postgres-rag-ollama #${BUILD_NUMBER}\\\\n\\\\nDocker image: ${DOCKER_IMAGE}:${BUILD_NUMBER}\\\\n\\\\nGitOps repository updated successfully.\\\\n\\\\nArgo CD will synchronize the application.\\\\n\\\\nBuild URL: ${BUILD_URL}\\"
+                      }" \
+                      "$SLACK_WEBHOOK"
+
                 '''
             }
         }
 
-
-        // =========================================================
-        // FAILURE
-        // =========================================================
 
         failure {
 
-            echo '========================================='
-            echo 'CI/CD PIPELINE FAILED'
-            echo '========================================='
+            echo '''
+==========================================
+CI/CD PIPELINE FAILED
+==========================================
+
+Check Jenkins console output.
+
+==========================================
+'''
+
 
             withCredentials([
+
                 string(
                     credentialsId: 'postgres-rag-ollama-slack',
                     variable: 'SLACK_WEBHOOK'
                 )
+
             ]) {
 
                 sh '''
+
                     curl -X POST \
-                        -H "Content-Type: application/json" \
-                        --data "{
-                            \\"text\\": \\"FAILED: postgres-rag-ollama #${BUILD_NUMBER}\\\\n\\\\nThe Jenkins pipeline failed.\\\\n\\\\nBuild URL: ${BUILD_URL}\\"
-                        }" \
-                        "$SLACK_WEBHOOK"
+                      -H "Content-Type: application/json" \
+                      --data "{
+                        \\"text\\": \\"FAILED: postgres-rag-ollama #${BUILD_NUMBER}\\\\n\\\\nThe Jenkins pipeline failed.\\\\n\\\\nBuild URL: ${BUILD_URL}\\"
+                      }" \
+                      "$SLACK_WEBHOOK"
+
                 '''
             }
         }
 
 
-        // =========================================================
-        // ALWAYS
-        // =========================================================
-
         always {
 
-            echo '========================================='
-            echo 'Pipeline execution finished'
-            echo '========================================='
+            echo '''
+==========================================
+PIPELINE EXECUTION FINISHED
+==========================================
+'''
         }
     }
 }
