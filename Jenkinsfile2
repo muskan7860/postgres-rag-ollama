@@ -15,7 +15,7 @@ spec:
   containers:
 
     # ==========================================
-    # PYTHON TEST CONTAINER
+    # PYTHON
     # ==========================================
 
     - name: python
@@ -24,15 +24,8 @@ spec:
         - /bin/sh
       tty: true
 
-      resources:
-        requests:
-          memory: "512Mi"
-        limits:
-          memory: "3Gi"
-
-
     # ==========================================
-    # KANIKO CONTAINER
+    # KANIKO
     # ==========================================
 
     - name: kaniko
@@ -41,19 +34,12 @@ spec:
         - /busybox/cat
       tty: true
 
-      resources:
-        requests:
-          memory: "512Mi"
-        limits:
-          memory: "3Gi"
-
       volumeMounts:
         - name: docker-config
           mountPath: /kaniko/.docker
 
-
     # ==========================================
-    # GIT CONTAINER
+    # GIT
     # ==========================================
 
     - name: git
@@ -62,15 +48,8 @@ spec:
         - /bin/sh
       tty: true
 
-      resources:
-        requests:
-          memory: "128Mi"
-        limits:
-          memory: "512Mi"
-
-
     # ==========================================
-    # SLACK CONTAINER
+    # SLACK
     # ==========================================
 
     - name: slack
@@ -78,13 +57,6 @@ spec:
       command:
         - /bin/sh
       tty: true
-
-      resources:
-        requests:
-          memory: "64Mi"
-        limits:
-          memory: "128Mi"
-
 
   volumes:
 
@@ -112,7 +84,7 @@ spec:
 
 
         // ==================================================
-        // STAGE 1 - PYTHON TESTS
+        // PYTHON TESTS
         // ==================================================
 
         stage('Python Tests') {
@@ -131,24 +103,18 @@ spec:
                         python --version
 
                         echo "=========================================="
-                        echo "INSTALLING PYTHON DEPENDENCIES"
+                        echo "INSTALLING DEPENDENCIES"
                         echo "=========================================="
 
-                        python -m pip install --no-cache-dir --upgrade pip
+                        python -m pip install --upgrade pip
 
-                        pip install --no-cache-dir -r requirements.txt
+                        pip install -r requirements.txt
 
                         echo "=========================================="
-                        echo "RUNNING PYTHON TESTS"
+                        echo "RUNNING TESTS"
                         echo "=========================================="
 
                         python -m pytest -v
-
-                        echo "=========================================="
-                        echo "PYTHON TESTS PASSED"
-                        echo "=========================================="
-
-                        rm -rf /root/.cache/pip
                     '''
                 }
             }
@@ -156,7 +122,7 @@ spec:
 
 
         // ==================================================
-        // STAGE 2 - BUILD & PUSH DOCKER IMAGE
+        // DOCKER BUILD + PUSH
         // ==================================================
 
         stage('Docker Build & Push') {
@@ -177,7 +143,7 @@ spec:
                             set -e
 
                             echo "=========================================="
-                            echo "CREATING DOCKER HUB AUTHENTICATION"
+                            echo "DOCKER HUB LOGIN"
                             echo "=========================================="
 
                             mkdir -p /kaniko/.docker
@@ -206,17 +172,13 @@ EOF
                               --context="$WORKSPACE" \
                               --dockerfile="$WORKSPACE/Dockerfile" \
                               --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER" \
-                              --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest" \
-                              --snapshot-mode=redo \
-                              --compressed-caching=false \
-                              --cache=false
+                              --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest"
 
                             echo "=========================================="
                             echo "DOCKER IMAGE PUSHED"
                             echo "=========================================="
 
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
-
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest"
                         '''
                     }
@@ -226,7 +188,7 @@ EOF
 
 
         // ==================================================
-        // STAGE 3 - UPDATE GITOPS
+        // UPDATE GITOPS
         // ==================================================
 
         stage('Update GitOps') {
@@ -258,13 +220,11 @@ EOF
 
                             cd postgres-rag-ollama-gitops
 
-
                             echo "=========================================="
                             echo "CURRENT IMAGE"
                             echo "=========================================="
 
                             grep "image:" app-deployment.yaml
-
 
                             echo "=========================================="
                             echo "UPDATING IMAGE TAG"
@@ -274,13 +234,11 @@ EOF
                               "s|image:.*postgres-rag-ollama:.*|image: docker.io/muskanpatel71198/postgres-rag-ollama:$BUILD_NUMBER|g" \
                               app-deployment.yaml
 
-
                             echo "=========================================="
                             echo "UPDATED IMAGE"
                             echo "=========================================="
 
                             grep "image:" app-deployment.yaml
-
 
                             echo "=========================================="
                             echo "GIT STATUS"
@@ -288,26 +246,21 @@ EOF
 
                             git status
 
-
                             git config user.name "Jenkins CI"
 
                             git config user.email "jenkins@localhost"
 
-
                             git add app-deployment.yaml
-
 
                             git commit \
                               -m "Update postgres-rag-ollama image to build $BUILD_NUMBER" \
                               || echo "No changes to commit"
-
 
                             echo "=========================================="
                             echo "PUSHING GITOPS CHANGE"
                             echo "=========================================="
 
                             git push origin main
-
 
                             echo "=========================================="
                             echo "GITOPS REPOSITORY UPDATED"
@@ -333,8 +286,6 @@ EOF
 CI/CD PIPELINE SUCCESS
 ==========================================
 
-Python tests passed.
-
 Docker image built and pushed.
 
 GitOps repository updated.
@@ -357,7 +308,7 @@ and synchronize the application.
                     sh '''
                         curl -X POST \
                           -H "Content-Type: application/json" \
-                          --data "{\"text\":\"SUCCESS: postgres-rag-ollama #${BUILD_NUMBER}\\n\\nPython tests passed.\\n\\nDocker image: docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n\\nGitOps repository updated.\\n\\nArgo CD will synchronize the application.\\n\\nBuild URL: ${BUILD_URL}\"}" \
+                          --data "{\"text\":\"SUCCESS: postgres-rag-ollama #${BUILD_NUMBER}\\n\\nDocker image pushed successfully.\\n\\nImage: docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n\\nGitOps repository updated.\\n\\nArgo CD will synchronize the application.\\n\\nBuild URL: ${BUILD_URL}\"}" \
                           "$SLACK_WEBHOOK"
                     '''
                 }
