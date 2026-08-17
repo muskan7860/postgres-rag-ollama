@@ -30,7 +30,7 @@ spec:
           cpu: "250m"
         limits:
           memory: "3Gi"
-          cpu: "1"
+          cpu: "2"
 
       volumeMounts:
         - name: docker-config
@@ -53,7 +53,7 @@ spec:
           cpu: "50m"
         limits:
           memory: "256Mi"
-          cpu: "200m"
+          cpu: "500m"
 
 
     # ==========================================
@@ -72,7 +72,7 @@ spec:
           cpu: "25m"
         limits:
           memory: "128Mi"
-          cpu: "100m"
+          cpu: "200m"
 
 
   volumes:
@@ -91,7 +91,8 @@ spec:
 
         DOCKER_IMAGE = 'muskanpatel71198/postgres-rag-ollama'
 
-        GITOPS_REPO = 'https://github.com/muskan7860/postgres-rag-ollama-gitops.git'
+        GITOPS_REPO =
+            'https://github.com/muskan7860/postgres-rag-ollama-gitops.git'
 
         IMAGE_TAG = "${BUILD_NUMBER}"
     }
@@ -102,21 +103,23 @@ spec:
 
         // ==================================================
         // STAGE 1
-        // BUILD + PUSH DOCKER IMAGE
+        // BUILD AND PUSH DOCKER IMAGE
         // ==================================================
 
-        stage('Build & Push Docker Image') {
+        stage('Docker Build & Push') {
 
             steps {
 
                 container('kaniko') {
 
                     withCredentials([
+
                         usernamePassword(
                             credentialsId: 'dockerhub-creds',
                             usernameVariable: 'DOCKER_USERNAME',
                             passwordVariable: 'DOCKER_PASSWORD'
                         )
+
                     ]) {
 
                         sh '''
@@ -133,7 +136,6 @@ spec:
                               "$DOCKER_PASSWORD" \
                               | base64 \
                               | tr -d '\\n')
-
 
                             cat > /kaniko/.docker/config.json <<EOF
 {
@@ -156,11 +158,11 @@ EOF
                               --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER" \
                               --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest" \
                               --cache=true \
-                              --cache-repo="docker.io/$DOCKER_USERNAME/postgres-rag-ollama-cache"
+                              --cache-ttl=24h
 
 
                             echo "=========================================="
-                            echo "DOCKER IMAGE PUSH SUCCESSFUL"
+                            echo "DOCKER IMAGE PUSHED"
                             echo "=========================================="
 
                             echo "Image:"
@@ -187,11 +189,13 @@ EOF
                 container('git') {
 
                     withCredentials([
+
                         usernamePassword(
                             credentialsId: 'github-creds',
                             usernameVariable: 'GIT_USERNAME',
                             passwordVariable: 'GIT_TOKEN'
                         )
+
                     ]) {
 
                         sh '''
@@ -207,7 +211,6 @@ EOF
                               https://$GIT_USERNAME:$GIT_TOKEN@github.com/muskan7860/postgres-rag-ollama-gitops.git \
                               postgres-rag-ollama-gitops
 
-
                             cd postgres-rag-ollama-gitops
 
 
@@ -215,7 +218,7 @@ EOF
                             echo "CURRENT IMAGE"
                             echo "=========================================="
 
-                            grep "image:" app-deployment.yaml
+                            grep "image:" app-deployment.yaml || true
 
 
                             echo "=========================================="
@@ -235,18 +238,18 @@ EOF
 
 
                             echo "=========================================="
-                            echo "GIT STATUS"
+                            echo "GIT CONFIGURATION"
                             echo "=========================================="
-
-                            git status
-
 
                             git config user.name "Jenkins CI"
                             git config user.email "jenkins@localhost"
 
 
-                            git add app-deployment.yaml
+                            echo "=========================================="
+                            echo "COMMITTING GITOPS CHANGE"
+                            echo "=========================================="
 
+                            git add app-deployment.yaml
 
                             git commit \
                               -m "Update postgres-rag-ollama image to build $BUILD_NUMBER" \
@@ -284,9 +287,7 @@ EOF
 CI/CD PIPELINE SUCCESS
 ==========================================
 
-Docker image built successfully.
-
-Docker image pushed to Docker Hub.
+Docker image built and pushed.
 
 GitOps repository updated.
 
@@ -296,13 +297,16 @@ and synchronize the application.
 ==========================================
 '''
 
+
             container('slack') {
 
                 withCredentials([
+
                     string(
                         credentialsId: 'postgres-rag-ollama-slack',
                         variable: 'SLACK_WEBHOOK'
                     )
+
                 ]) {
 
                     sh '''
@@ -328,13 +332,16 @@ Check Jenkins console output.
 ==========================================
 '''
 
+
             container('slack') {
 
                 withCredentials([
+
                     string(
                         credentialsId: 'postgres-rag-ollama-slack',
                         variable: 'SLACK_WEBHOOK'
                     )
+
                 ]) {
 
                     sh '''

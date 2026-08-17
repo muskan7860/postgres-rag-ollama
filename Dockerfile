@@ -7,19 +7,29 @@ ENV PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Install system dependencies required by psycopg2
+# System dependency required by psycopg2
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy dependency file first for Docker layer caching
+# Copy dependency file
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Install CPU-only PyTorch first.
+# This prevents pip from downloading NVIDIA CUDA packages.
+RUN pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch
 
-# Copy application source code
+# Install application dependencies.
+# --extra-index-url allows pip to use PyPI for packages
+# other than torch.
+RUN pip install --no-cache-dir \
+    --extra-index-url https://pypi.org/simple \
+    -r requirements.txt
+
+# Copy application source
 COPY app ./app
 
 # Copy documents
@@ -28,7 +38,7 @@ COPY documents ./documents
 # Copy PostgreSQL initialization files
 COPY postgres ./postgres
 
-# Create non-root application user
+# Create non-root user
 RUN useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app
 
