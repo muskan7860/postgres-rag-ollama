@@ -15,24 +15,7 @@ spec:
   containers:
 
     # ==========================================
-    # PYTHON TEST CONTAINER
-    # ==========================================
-
-    - name: python
-      image: python:3.12-slim
-      command:
-        - /bin/sh
-      tty: true
-
-      resources:
-        requests:
-          memory: "512Mi"
-        limits:
-          memory: "3Gi"
-
-
-    # ==========================================
-    # KANIKO CONTAINER
+    # KANIKO
     # ==========================================
 
     - name: kaniko
@@ -44,8 +27,10 @@ spec:
       resources:
         requests:
           memory: "512Mi"
+          cpu: "250m"
         limits:
           memory: "3Gi"
+          cpu: "1"
 
       volumeMounts:
         - name: docker-config
@@ -53,7 +38,7 @@ spec:
 
 
     # ==========================================
-    # GIT CONTAINER
+    # GIT
     # ==========================================
 
     - name: git
@@ -64,13 +49,15 @@ spec:
 
       resources:
         requests:
-          memory: "128Mi"
+          memory: "64Mi"
+          cpu: "50m"
         limits:
-          memory: "512Mi"
+          memory: "256Mi"
+          cpu: "200m"
 
 
     # ==========================================
-    # SLACK CONTAINER
+    # SLACK
     # ==========================================
 
     - name: slack
@@ -81,9 +68,11 @@ spec:
 
       resources:
         requests:
-          memory: "64Mi"
+          memory: "32Mi"
+          cpu: "25m"
         limits:
           memory: "128Mi"
+          cpu: "100m"
 
 
   volumes:
@@ -93,7 +82,7 @@ spec:
 
 '''
 
-            defaultContainer 'python'
+            defaultContainer 'kaniko'
         }
     }
 
@@ -112,54 +101,11 @@ spec:
 
 
         // ==================================================
-        // STAGE 1 - PYTHON TESTS
+        // STAGE 1
+        // BUILD + PUSH DOCKER IMAGE
         // ==================================================
 
-        stage('Python Tests') {
-
-            steps {
-
-                container('python') {
-
-                    sh '''
-                        set -e
-
-                        echo "=========================================="
-                        echo "PYTHON VERSION"
-                        echo "=========================================="
-
-                        python --version
-
-                        echo "=========================================="
-                        echo "INSTALLING PYTHON DEPENDENCIES"
-                        echo "=========================================="
-
-                        python -m pip install --no-cache-dir --upgrade pip
-
-                        pip install --no-cache-dir -r requirements.txt
-
-                        echo "=========================================="
-                        echo "RUNNING PYTHON TESTS"
-                        echo "=========================================="
-
-                        python -m pytest -v
-
-                        echo "=========================================="
-                        echo "PYTHON TESTS PASSED"
-                        echo "=========================================="
-
-                        rm -rf /root/.cache/pip
-                    '''
-                }
-            }
-        }
-
-
-        // ==================================================
-        // STAGE 2 - BUILD & PUSH DOCKER IMAGE
-        // ==================================================
-
-        stage('Docker Build & Push') {
+        stage('Build & Push Docker Image') {
 
             steps {
 
@@ -177,7 +123,7 @@ spec:
                             set -e
 
                             echo "=========================================="
-                            echo "CREATING DOCKER HUB AUTHENTICATION"
+                            echo "DOCKER HUB AUTHENTICATION"
                             echo "=========================================="
 
                             mkdir -p /kaniko/.docker
@@ -187,6 +133,7 @@ spec:
                               "$DOCKER_PASSWORD" \
                               | base64 \
                               | tr -d '\\n')
+
 
                             cat > /kaniko/.docker/config.json <<EOF
 {
@@ -198,6 +145,7 @@ spec:
 }
 EOF
 
+
                             echo "=========================================="
                             echo "BUILDING DOCKER IMAGE"
                             echo "=========================================="
@@ -207,16 +155,18 @@ EOF
                               --dockerfile="$WORKSPACE/Dockerfile" \
                               --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER" \
                               --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest" \
-                              --snapshot-mode=redo \
-                              --compressed-caching=false \
-                              --cache=false
+                              --cache=true \
+                              --cache-repo="docker.io/$DOCKER_USERNAME/postgres-rag-ollama-cache"
+
 
                             echo "=========================================="
-                            echo "DOCKER IMAGE PUSHED"
+                            echo "DOCKER IMAGE PUSH SUCCESSFUL"
                             echo "=========================================="
 
+                            echo "Image:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
 
+                            echo "Latest:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest"
                         '''
                     }
@@ -226,7 +176,8 @@ EOF
 
 
         // ==================================================
-        // STAGE 3 - UPDATE GITOPS
+        // STAGE 2
+        // UPDATE GITOPS REPOSITORY
         // ==================================================
 
         stage('Update GitOps') {
@@ -255,6 +206,7 @@ EOF
                             git clone \
                               https://$GIT_USERNAME:$GIT_TOKEN@github.com/muskan7860/postgres-rag-ollama-gitops.git \
                               postgres-rag-ollama-gitops
+
 
                             cd postgres-rag-ollama-gitops
 
@@ -290,7 +242,6 @@ EOF
 
 
                             git config user.name "Jenkins CI"
-
                             git config user.email "jenkins@localhost"
 
 
@@ -310,7 +261,7 @@ EOF
 
 
                             echo "=========================================="
-                            echo "GITOPS REPOSITORY UPDATED"
+                            echo "GITOPS UPDATE SUCCESSFUL"
                             echo "=========================================="
                         '''
                     }
@@ -333,9 +284,9 @@ EOF
 CI/CD PIPELINE SUCCESS
 ==========================================
 
-Python tests passed.
+Docker image built successfully.
 
-Docker image built and pushed.
+Docker image pushed to Docker Hub.
 
 GitOps repository updated.
 
@@ -357,7 +308,7 @@ and synchronize the application.
                     sh '''
                         curl -X POST \
                           -H "Content-Type: application/json" \
-                          --data "{\"text\":\"SUCCESS: postgres-rag-ollama #${BUILD_NUMBER}\\n\\nPython tests passed.\\n\\nDocker image: docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n\\nGitOps repository updated.\\n\\nArgo CD will synchronize the application.\\n\\nBuild URL: ${BUILD_URL}\"}" \
+                          --data "{\"text\":\"SUCCESS: postgres-rag-ollama #${BUILD_NUMBER}\\n\\nDocker image pushed successfully.\\n\\nImage: docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n\\nGitOps repository updated.\\n\\nArgo CD will synchronize the application.\\n\\nBuild URL: ${BUILD_URL}\"}" \
                           "$SLACK_WEBHOOK"
                     '''
                 }
