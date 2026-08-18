@@ -16,22 +16,18 @@ spec:
 
     # ==========================================
     # KANIKO
-    # Used to build and push Docker image
     # ==========================================
 
     - name: kaniko
       image: gcr.io/kaniko-project/executor:v1.23.2-debug
-
       command:
         - /busybox/cat
-
       tty: true
 
       resources:
         requests:
           memory: "512Mi"
           cpu: "250m"
-
         limits:
           memory: "4Gi"
           cpu: "2"
@@ -43,25 +39,40 @@ spec:
 
     # ==========================================
     # GIT
-    # Used to update GitOps repository
     # ==========================================
 
     - name: git
       image: alpine/git:latest
-
       command:
         - /bin/sh
-
       tty: true
 
       resources:
         requests:
           memory: "64Mi"
           cpu: "50m"
-
         limits:
           memory: "256Mi"
           cpu: "500m"
+
+
+    # ==========================================
+    # SLACK
+    # ==========================================
+
+    - name: slack
+      image: curlimages/curl:latest
+      command:
+        - /bin/sh
+      tty: true
+
+      resources:
+        requests:
+          memory: "32Mi"
+          cpu: "25m"
+        limits:
+          memory: "128Mi"
+          cpu: "200m"
 
 
   volumes:
@@ -76,20 +87,14 @@ spec:
     }
 
 
-    // ==========================================
-    // GLOBAL ENVIRONMENT VARIABLES
-    // ==========================================
-
     environment {
 
-        DOCKER_IMAGE =
-            'muskanpatel71198/postgres-rag-ollama'
+        DOCKER_IMAGE = 'muskanpatel71198/postgres-rag-ollama'
 
         GITOPS_REPO =
             'https://github.com/muskan7860/postgres-rag-ollama-gitops.git'
 
-        IMAGE_TAG =
-            "${BUILD_NUMBER}"
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
 
@@ -98,7 +103,7 @@ spec:
 
         // ==================================================
         // STAGE 1
-        // BUILD + PUSH DOCKER IMAGE
+        // BUILD AND PUSH DOCKER IMAGE
         // ==================================================
 
         stage('Docker Build & Push') {
@@ -126,13 +131,11 @@ spec:
 
                             mkdir -p /kaniko/.docker
 
-
                             AUTH=$(printf "%s:%s" \
                               "$DOCKER_USERNAME" \
                               "$DOCKER_PASSWORD" \
                               | base64 \
                               | tr -d '\\n')
-
 
                             cat > /kaniko/.docker/config.json <<EOF
 {
@@ -149,12 +152,6 @@ EOF
                             echo "BUILDING DOCKER IMAGE"
                             echo "=========================================="
 
-                            echo "Build Number: $BUILD_NUMBER"
-
-                            echo "Image:"
-                            echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
-
-
                             /kaniko/executor \
                               --context="$WORKSPACE" \
                               --dockerfile="$WORKSPACE/Dockerfile" \
@@ -165,15 +162,13 @@ EOF
 
 
                             echo "=========================================="
-                            echo "DOCKER IMAGE PUSHED SUCCESSFULLY"
+                            echo "DOCKER IMAGE PUSHED"
                             echo "=========================================="
 
-                            echo "Versioned Image:"
+                            echo "Image:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
 
-                            echo ""
-
-                            echo "Latest Image:"
+                            echo "Latest:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest"
                         '''
                     }
@@ -212,17 +207,15 @@ EOF
 
                             rm -rf postgres-rag-ollama-gitops
 
-
                             git clone \
                               https://$GIT_USERNAME:$GIT_TOKEN@github.com/muskan7860/postgres-rag-ollama-gitops.git \
                               postgres-rag-ollama-gitops
-
 
                             cd postgres-rag-ollama-gitops
 
 
                             echo "=========================================="
-                            echo "CURRENT KUBERNETES IMAGE"
+                            echo "CURRENT IMAGE"
                             echo "=========================================="
 
                             grep "image:" app-deployment.yaml || true
@@ -238,26 +231,18 @@ EOF
 
 
                             echo "=========================================="
-                            echo "UPDATED KUBERNETES IMAGE"
+                            echo "UPDATED IMAGE"
                             echo "=========================================="
 
                             grep "image:" app-deployment.yaml
 
 
                             echo "=========================================="
-                            echo "CONFIGURING GIT"
+                            echo "GIT CONFIGURATION"
                             echo "=========================================="
 
                             git config user.name "Jenkins CI"
-
                             git config user.email "jenkins@localhost"
-
-
-                            echo "=========================================="
-                            echo "GIT STATUS"
-                            echo "=========================================="
-
-                            git status
 
 
                             echo "=========================================="
@@ -265,7 +250,6 @@ EOF
                             echo "=========================================="
 
                             git add app-deployment.yaml
-
 
                             git commit \
                               -m "Update postgres-rag-ollama image to build $BUILD_NUMBER" \
@@ -282,9 +266,6 @@ EOF
                             echo "=========================================="
                             echo "GITOPS UPDATE SUCCESSFUL"
                             echo "=========================================="
-
-                            echo "Argo CD will detect this Git change"
-                            echo "and automatically synchronize Kubernetes."
                         '''
                     }
                 }
@@ -299,11 +280,6 @@ EOF
 
     post {
 
-
-        // ==================================================
-        // SUCCESS
-        // ==================================================
-
         success {
 
             echo '''
@@ -311,91 +287,38 @@ EOF
 CI/CD PIPELINE SUCCESS
 ==========================================
 
-Docker image built successfully.
+Docker image built and pushed.
 
-Docker image pushed successfully.
+GitOps repository updated.
 
-GitOps repository updated successfully.
-
-Argo CD will automatically detect
-the GitOps change and synchronize
-the Kubernetes application.
+Argo CD will detect the Git change
+and synchronize the application.
 
 ==========================================
 '''
 
 
-            script {
+            container('slack') {
 
-                try {
+                withCredentials([
 
-                    echo "Sending SUCCESS notification to Slack..."
-
-
-                    slackSend(
-
-                        channel: '#postgres-rag-ollama',
-
-                        color: 'good',
-
-                        tokenCredentialId:
-                            'postgres-rag-ollama-slack',
-
-                        message: """
-✅ CI/CD PIPELINE SUCCESS
-
-Application:
-postgres-rag-ollama
-
-Jenkins Build:
-#${env.BUILD_NUMBER}
-
-Status:
-SUCCESS
-
-Docker Image:
-docker.io/muskanpatel71198/postgres-rag-ollama:${env.BUILD_NUMBER}
-
-Docker Hub:
-Image built and pushed successfully.
-
-GitOps:
-app-deployment.yaml updated successfully.
-
-Argo CD:
-Automatic synchronization will deploy the new image.
-
-Build URL:
-${env.BUILD_URL}
-"""
+                    string(
+                        credentialsId: 'postgres-rag-ollama-slack',
+                        variable: 'SLACK_WEBHOOK'
                     )
 
+                ]) {
 
-                    echo "Slack SUCCESS notification sent."
-
-                }
-
-                catch (Exception e) {
-
-                    echo "=========================================="
-
-                    echo "WARNING: Slack notification failed."
-
-                    echo "CI/CD deployment itself was successful."
-
-                    echo "Slack failure will NOT mark the pipeline failed."
-
-                    echo "=========================================="
-
-                    echo "Slack error: ${e.getMessage()}"
+                    sh '''
+                        curl -X POST \
+                          -H "Content-Type: application/json" \
+                          --data "{\"text\":\"SUCCESS: postgres-rag-ollama #${BUILD_NUMBER}\\n\\nDocker image pushed successfully.\\n\\nImage: docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n\\nGitOps repository updated.\\n\\nArgo CD will synchronize the application.\\n\\nBuild URL: ${BUILD_URL}\"}" \
+                          "$SLACK_WEBHOOK"
+                    '''
                 }
             }
         }
 
-
-        // ==================================================
-        // FAILURE
-        // ==================================================
 
         failure {
 
@@ -410,63 +333,27 @@ Check Jenkins console output.
 '''
 
 
-            script {
+            container('slack') {
 
-                try {
+                withCredentials([
 
-                    echo "Sending FAILURE notification to Slack..."
-
-
-                    slackSend(
-
-                        channel: '#postgres-rag-ollama',
-
-                        color: 'danger',
-
-                        tokenCredentialId:
-                            'postgres-rag-ollama-slack',
-
-                        message: """
-❌ CI/CD PIPELINE FAILED
-
-Application:
-postgres-rag-ollama
-
-Jenkins Build:
-#${env.BUILD_NUMBER}
-
-Status:
-FAILED
-
-Please check Jenkins console logs.
-
-Build URL:
-${env.BUILD_URL}
-"""
+                    string(
+                        credentialsId: 'postgres-rag-ollama-slack',
+                        variable: 'SLACK_WEBHOOK'
                     )
 
+                ]) {
 
-                    echo "Slack FAILURE notification sent."
-
-                }
-
-                catch (Exception e) {
-
-                    echo "=========================================="
-
-                    echo "WARNING: Slack failure notification could not be sent."
-
-                    echo "=========================================="
-
-                    echo "Slack error: ${e.getMessage()}"
+                    sh '''
+                        curl -X POST \
+                          -H "Content-Type: application/json" \
+                          --data "{\"text\":\"FAILED: postgres-rag-ollama #${BUILD_NUMBER}\\n\\nThe Jenkins pipeline failed.\\n\\nBuild URL: ${BUILD_URL}\"}" \
+                          "$SLACK_WEBHOOK"
+                    '''
                 }
             }
         }
 
-
-        // ==================================================
-        // ALWAYS
-        // ==================================================
 
         always {
 
