@@ -16,7 +16,7 @@ spec:
 
     # ==========================================
     # KANIKO
-    # Used to build and push Docker image
+    # Build and push Docker image
     # ==========================================
 
     - name: kaniko
@@ -43,7 +43,7 @@ spec:
 
     # ==========================================
     # GIT
-    # Used to update GitOps repository
+    # Update GitOps repository
     # ==========================================
 
     - name: git
@@ -62,6 +62,31 @@ spec:
         limits:
           memory: "256Mi"
           cpu: "500m"
+
+
+    # ==========================================
+    # SLACK WEBHOOK
+    # No Jenkins Slack plugin required
+    # ==========================================
+
+    - name: slack
+      image: curlimages/curl:latest
+
+      command:
+        - /bin/sh
+        - -c
+        - cat
+
+      tty: true
+
+      resources:
+        requests:
+          memory: "32Mi"
+          cpu: "25m"
+
+        limits:
+          memory: "128Mi"
+          cpu: "200m"
 
 
   volumes:
@@ -329,46 +354,41 @@ the Kubernetes application.
 
                 try {
 
-                    echo "Sending SUCCESS notification to Slack..."
+                    echo "Sending SUCCESS notification to Slack via webhook..."
 
 
-                    slackSend(
+                    container('slack') {
 
-                        channel: '#postgres-rag-ollama',
+                        withCredentials([
 
-                        color: 'good',
+                            string(
+                                credentialsId: 'postgres-rag-ollama-slack',
+                                variable: 'SLACK_WEBHOOK'
+                            )
 
-                        tokenCredentialId:
-                            'postgres-rag-ollama-slack',
+                        ]) {
 
-                        message: """
-✅ CI/CD PIPELINE SUCCESS
+                            sh '''
+                                set +x
 
-Application:
-postgres-rag-ollama
+                                PAYLOAD=$(cat <<EOF
+{
+  "text": "✅ *CI/CD PIPELINE SUCCESS*\\n\\n*Application:* postgres-rag-ollama\\n*Jenkins Build:* #${BUILD_NUMBER}\\n*Status:* SUCCESS\\n*Docker Image:* docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n*Docker Hub:* Image built and pushed successfully.\\n*GitOps:* app-deployment.yaml updated successfully.\\n*Argo CD:* Automatic synchronization will deploy the new image.\\n*Build URL:* ${BUILD_URL}"
+}
+EOF
+)
 
-Jenkins Build:
-#${env.BUILD_NUMBER}
-
-Status:
-SUCCESS
-
-Docker Image:
-docker.io/muskanpatel71198/postgres-rag-ollama:${env.BUILD_NUMBER}
-
-Docker Hub:
-Image built and pushed successfully.
-
-GitOps:
-app-deployment.yaml updated successfully.
-
-Argo CD:
-Automatic synchronization will deploy the new image.
-
-Build URL:
-${env.BUILD_URL}
-"""
-                    )
+                                curl \
+                                  --fail \
+                                  --silent \
+                                  --show-error \
+                                  -X POST \
+                                  -H 'Content-Type: application/json' \
+                                  --data "$PAYLOAD" \
+                                  "$SLACK_WEBHOOK"
+                            '''
+                        }
+                    }
 
 
                     echo "Slack SUCCESS notification sent."
@@ -414,36 +434,41 @@ Check Jenkins console output.
 
                 try {
 
-                    echo "Sending FAILURE notification to Slack..."
+                    echo "Sending FAILURE notification to Slack via webhook..."
 
 
-                    slackSend(
+                    container('slack') {
 
-                        channel: '#postgres-rag-ollama',
+                        withCredentials([
 
-                        color: 'danger',
+                            string(
+                                credentialsId: 'postgres-rag-ollama-slack',
+                                variable: 'SLACK_WEBHOOK'
+                            )
 
-                        tokenCredentialId:
-                            'postgres-rag-ollama-slack',
+                        ]) {
 
-                        message: """
-❌ CI/CD PIPELINE FAILED
+                            sh '''
+                                set +x
 
-Application:
-postgres-rag-ollama
+                                PAYLOAD=$(cat <<EOF
+{
+  "text": "❌ *CI/CD PIPELINE FAILED*\\n\\n*Application:* postgres-rag-ollama\\n*Jenkins Build:* #${BUILD_NUMBER}\\n*Status:* FAILED\\n*Action:* Please check Jenkins console logs.\\n*Build URL:* ${BUILD_URL}"
+}
+EOF
+)
 
-Jenkins Build:
-#${env.BUILD_NUMBER}
-
-Status:
-FAILED
-
-Please check Jenkins console logs.
-
-Build URL:
-${env.BUILD_URL}
-"""
-                    )
+                                curl \
+                                  --fail \
+                                  --silent \
+                                  --show-error \
+                                  -X POST \
+                                  -H 'Content-Type: application/json' \
+                                  --data "$PAYLOAD" \
+                                  "$SLACK_WEBHOOK"
+                            '''
+                        }
+                    }
 
 
                     echo "Slack FAILURE notification sent."
@@ -455,6 +480,8 @@ ${env.BUILD_URL}
                     echo "=========================================="
 
                     echo "WARNING: Slack failure notification could not be sent."
+
+                    echo "Slack notification failure will not hide the original pipeline failure."
 
                     echo "=========================================="
 
