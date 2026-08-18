@@ -2,6 +2,7 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV PIP_DEFAULT_TIMEOUT=300
 
 WORKDIR /app
 
@@ -13,14 +14,19 @@ RUN apt-get update \
 
 COPY requirements.txt .
 
-# Install CPU-only PyTorch.
-# This prevents NVIDIA CUDA packages from being downloaded.
-RUN pip install --no-cache-dir \
+# Install CPU-only PyTorch
+RUN pip install \
+    --no-cache-dir \
+    --timeout 300 \
+    --retries 10 \
     --index-url https://download.pytorch.org/whl/cpu \
     torch
 
-# Install remaining application dependencies.
-RUN pip install --no-cache-dir \
+# Install remaining application dependencies
+RUN pip install \
+    --no-cache-dir \
+    --timeout 300 \
+    --retries 10 \
     -r requirements.txt
 
 COPY app ./app
