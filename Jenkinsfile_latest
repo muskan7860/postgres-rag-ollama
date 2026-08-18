@@ -1,9 +1,5 @@
 pipeline {
 
-    // ==========================================================
-    // JENKINS KUBERNETES AGENT
-    // ==========================================================
-
     agent {
         kubernetes {
 
@@ -18,10 +14,10 @@ spec:
 
   containers:
 
-    # ==========================================================
+    # ==========================================
     # KANIKO
-    # Builds and pushes Docker images without Docker daemon
-    # ==========================================================
+    # Build and push Docker image
+    # ==========================================
 
     - name: kaniko
       image: gcr.io/kaniko-project/executor:v1.23.2-debug
@@ -45,12 +41,10 @@ spec:
           mountPath: /kaniko/.docker
 
 
-    # ==========================================================
+    # ==========================================
     # GIT
-    # Used for:
-    # 1. Updating GitOps repository
-    # 2. Sending Slack webhook using curl
-    # ==========================================================
+    # Update GitOps repository
+    # ==========================================
 
     - name: git
       image: alpine/git:latest
@@ -70,6 +64,31 @@ spec:
           cpu: "500m"
 
 
+    # ==========================================
+    # SLACK WEBHOOK
+    # No Jenkins Slack plugin required
+    # ==========================================
+
+    - name: slack
+      image: curlimages/curl:latest
+
+      command:
+        - /bin/sh
+        - -c
+        - cat
+
+      tty: true
+
+      resources:
+        requests:
+          memory: "32Mi"
+          cpu: "25m"
+
+        limits:
+          memory: "128Mi"
+          cpu: "200m"
+
+
   volumes:
 
     - name: docker-config
@@ -82,9 +101,9 @@ spec:
     }
 
 
-    // ==========================================================
+    // ==========================================
     // GLOBAL ENVIRONMENT VARIABLES
-    // ==========================================================
+    // ==========================================
 
     environment {
 
@@ -99,17 +118,13 @@ spec:
     }
 
 
-    // ==========================================================
-    // PIPELINE STAGES
-    // ==========================================================
-
     stages {
 
 
-        // ======================================================
+        // ==================================================
         // STAGE 1
-        // DOCKER BUILD + PUSH
-        // ======================================================
+        // BUILD + PUSH DOCKER IMAGE
+        // ==================================================
 
         stage('Docker Build & Push') {
 
@@ -161,10 +176,8 @@ EOF
 
                             echo "Build Number: $BUILD_NUMBER"
 
-                            echo ""
-                            echo "Docker Image:"
+                            echo "Image:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
-                            echo ""
 
 
                             /kaniko/executor \
@@ -180,7 +193,6 @@ EOF
                             echo "DOCKER IMAGE PUSHED SUCCESSFULLY"
                             echo "=========================================="
 
-                            echo ""
                             echo "Versioned Image:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
 
@@ -188,8 +200,6 @@ EOF
 
                             echo "Latest Image:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest"
-
-                            echo ""
                         '''
                     }
                 }
@@ -197,10 +207,10 @@ EOF
         }
 
 
-        // ======================================================
+        // ==================================================
         // STAGE 2
         // UPDATE GITOPS REPOSITORY
-        // ======================================================
+        // ==================================================
 
         stage('Update GitOps') {
 
@@ -298,10 +308,8 @@ EOF
                             echo "GITOPS UPDATE SUCCESSFUL"
                             echo "=========================================="
 
-                            echo ""
                             echo "Argo CD will detect this Git change"
                             echo "and automatically synchronize Kubernetes."
-                            echo ""
                         '''
                     }
                 }
@@ -310,16 +318,16 @@ EOF
     }
 
 
-    // ==========================================================
+    // ==================================================
     // POST ACTIONS
-    // ==========================================================
+    // ==================================================
 
     post {
 
 
-        // ======================================================
+        // ==================================================
         // SUCCESS
-        // ======================================================
+        // ==================================================
 
         success {
 
@@ -349,13 +357,7 @@ the Kubernetes application.
                     echo "Sending SUCCESS notification to Slack via webhook..."
 
 
-                    // --------------------------------------------------
-                    // Reuse existing GIT container.
-                    // This avoids the previous durable-task problem
-                    // from the separate Slack container.
-                    // --------------------------------------------------
-
-                    container('git') {
+                    container('slack') {
 
                         withCredentials([
 
@@ -367,80 +369,53 @@ the Kubernetes application.
                         ]) {
 
                             sh '''
-                                set -e
-
-                                # Prevent secret values from being echoed
                                 set +x
 
+                                PAYLOAD=$(cat <<EOF
+{
+  "text": "✅ *CI/CD PIPELINE SUCCESS*\\n\\n*Application:* postgres-rag-ollama\\n*Jenkins Build:* #${BUILD_NUMBER}\\n*Status:* SUCCESS\\n*Docker Image:* docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n*Docker Hub:* Image built and pushed successfully.\\n*GitOps:* app-deployment.yaml updated successfully.\\n*Argo CD:* Automatic synchronization will deploy the new image.\\n*Build URL:* ${BUILD_URL}"
+}
+EOF
+)
 
-                                # ------------------------------------------
-                                # Install curl only if it is not available
-                                # ------------------------------------------
-
-                                if ! command -v curl >/dev/null 2>&1; then
-
-                                    echo "Installing curl for Slack notification..."
-
-                                    apk add --no-cache curl >/dev/null 2>&1
-
-                                fi
-
-
-                                echo "Sending Slack SUCCESS webhook..."
-
-
-                                # ------------------------------------------
-                                # Send Slack webhook
-                                # ------------------------------------------
-
-                                cat <<EOF | curl \
+                                curl \
                                   --fail \
                                   --silent \
                                   --show-error \
-                                  --connect-timeout 15 \
-                                  --max-time 30 \
                                   -X POST \
                                   -H 'Content-Type: application/json' \
-                                  --data-binary @- \
+                                  --data "$PAYLOAD" \
                                   "$SLACK_WEBHOOK"
-{
-  "text": "✅ *CI/CD PIPELINE SUCCESS*\\n\\n*Application:* postgres-rag-ollama\\n*Build:* #${BUILD_NUMBER}\\n*Status:* SUCCESS\\n\\n*Docker Image:*\\ndocker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n\\n*Docker Hub:* Image built and pushed successfully.\\n\\n*GitOps:* app-deployment.yaml updated successfully.\\n\\n*Argo CD:* Automatic synchronization triggered.\\n\\n*Jenkins Build:* ${BUILD_URL}"
-}
-EOF
-
-
-                                echo ""
-                                echo "Slack SUCCESS webhook completed."
                             '''
                         }
                     }
 
 
-                    echo "Slack SUCCESS notification sent successfully."
+                    echo "Slack SUCCESS notification sent."
 
                 }
 
                 catch (Exception e) {
 
                     echo "=========================================="
+
                     echo "WARNING: Slack notification failed."
-                    echo "=========================================="
 
                     echo "CI/CD deployment itself was successful."
 
-                    echo "Slack failure will NOT mark pipeline failed."
-
-                    echo "Slack error: ${e.getMessage()}"
+                    echo "Slack failure will NOT mark the pipeline failed."
 
                     echo "=========================================="
+
+                    echo "Slack error: ${e.getMessage()}"
                 }
             }
         }
 
 
-        // ======================================================
+        // ==================================================
         // FAILURE
-        // ======================================================
+        // ==================================================
 
         failure {
 
@@ -462,7 +437,7 @@ Check Jenkins console output.
                     echo "Sending FAILURE notification to Slack via webhook..."
 
 
-                    container('git') {
+                    container('slack') {
 
                         withCredentials([
 
@@ -474,78 +449,51 @@ Check Jenkins console output.
                         ]) {
 
                             sh '''
-                                set -e
-
-                                # Prevent sensitive values appearing in logs
                                 set +x
 
+                                PAYLOAD=$(cat <<EOF
+{
+  "text": "❌ *CI/CD PIPELINE FAILED*\\n\\n*Application:* postgres-rag-ollama\\n*Jenkins Build:* #${BUILD_NUMBER}\\n*Status:* FAILED\\n*Action:* Please check Jenkins console logs.\\n*Build URL:* ${BUILD_URL}"
+}
+EOF
+)
 
-                                # ------------------------------------------
-                                # Install curl if required
-                                # ------------------------------------------
-
-                                if ! command -v curl >/dev/null 2>&1; then
-
-                                    echo "Installing curl for Slack notification..."
-
-                                    apk add --no-cache curl >/dev/null 2>&1
-
-                                fi
-
-
-                                echo "Sending Slack FAILURE webhook..."
-
-
-                                # ------------------------------------------
-                                # Send failure notification
-                                # ------------------------------------------
-
-                                cat <<EOF | curl \
+                                curl \
                                   --fail \
                                   --silent \
                                   --show-error \
-                                  --connect-timeout 15 \
-                                  --max-time 30 \
                                   -X POST \
                                   -H 'Content-Type: application/json' \
-                                  --data-binary @- \
+                                  --data "$PAYLOAD" \
                                   "$SLACK_WEBHOOK"
-{
-  "text": "❌ *CI/CD PIPELINE FAILED*\\n\\n*Application:* postgres-rag-ollama\\n*Build:* #${BUILD_NUMBER}\\n*Status:* FAILED\\n\\n*Action:* Please check Jenkins console logs.\\n\\n*Jenkins Build:* ${BUILD_URL}"
-}
-EOF
-
-
-                                echo ""
-                                echo "Slack FAILURE webhook completed."
                             '''
                         }
                     }
 
 
-                    echo "Slack FAILURE notification sent successfully."
+                    echo "Slack FAILURE notification sent."
 
                 }
 
                 catch (Exception e) {
 
                     echo "=========================================="
-                    echo "WARNING: Slack failure notification failed."
-                    echo "=========================================="
 
-                    echo "Original CI/CD failure remains unchanged."
+                    echo "WARNING: Slack failure notification could not be sent."
+
+                    echo "Slack notification failure will not hide the original pipeline failure."
+
+                    echo "=========================================="
 
                     echo "Slack error: ${e.getMessage()}"
-
-                    echo "=========================================="
                 }
             }
         }
 
 
-        // ======================================================
+        // ==================================================
         // ALWAYS
-        // ======================================================
+        // ==================================================
 
         always {
 
