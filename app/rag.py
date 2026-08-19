@@ -1,30 +1,159 @@
-import requests
-
-from app.config import settings
 from app.database import get_connection
 from app.embeddings import generate_embedding
+from app.ollama import generate_answer
 
 
-def store_document(content: str):
+def ensure_vector_store(connection):
     """
-    Generate an embedding for the document and store
-    both the document content and embedding in PostgreSQL.
+    Ensure pgvector and the RAG documents table exist.
     """
 
-    embedding = generate_embedding(content)
-    connection = get_connection()
+    with connection.cursor() as cursor:
+
+        cursor.execute(
+            """
+            CREATE EXTENSION IF NOT EXISTS vector;
+            """
+        )
+
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS rag_documents (
+                id BIGSERIAL PRIMARY KEY,
+                source_table TEXT,
+                content TEXT NOT NULL,
+                embedding vector(384)
+            );
+            """
+        )
+
+    connection.commit()
+
+
+def get_tables(connection, schema="public"):
+    """
+    Discover tables from the selected PostgreSQL schema.
+    """
+
+    with connection.cursor() as cursor:
+
+        cursor.execute(
+            """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = %s
+              AND table_type = 'BASE TABLE'
+              AND table_name != 'rag_documents'
+            ORDER BY table_name;
+            """,
+            (schema,),
+        )
+
+        return [row[0] for row in cursor.fetchall()]
+
+
+def refresh_index(
+    host,
+    port,
+    database,
+    user,
+    password,
+    schema="public",
+):
+    """
+    Read PostgreSQL tables and build the pgvector RAG index.
+    """
+
+    connection = get_connection(
+        host=host,
+        port=port,
+        database=database,
+        user=user,
+        password=password,
+    )
+
+    indexed_rows = 0
+    indexed_tables = []
 
     try:
+
+        ensure_vector_store(connection)
+
+        tables = get_tables(
+            connection,
+            schema=schema,
+        )
+
         with connection.cursor() as cursor:
+
             cursor.execute(
-                """
-                INSERT INTO documents (content, embedding)
-                VALUES (%s, %s)
-                """,
-                (content, embedding),
+                "TRUNCATE TABLE rag_documents;"
             )
 
         connection.commit()
+
+        for table in tables:
+
+            with connection.cursor() as cursor:
+
+                cursor.execute(
+                    f'SELECT * FROM "{schema}"."{table}"'
+                )
+
+                column_names = [
+                    description[0]
+                    for description in cursor.description
+                ]
+
+                rows = cursor.fetchall()
+
+            for row in rows:
+
+                row_data = dict(
+                    zip(column_names, row)
+                )
+
+                content_parts = [
+                    f"{key}: {value}"
+                    for key, value in row_data.items()
+                ]
+
+                content = (
+                    f"Table: {table}\n"
+                    + "\n".join(content_parts)
+                )
+
+                embedding = generate_embedding(content)
+
+                with connection.cursor() as cursor:
+
+                    cursor.execute(
+                        """
+                        INSERT INTO rag_documents
+                        (
+                            source_table,
+                            content,
+                            embedding
+                        )
+                        VALUES (%s, %s, %s)
+                        """,
+                        (
+                            table,
+                            content,
+                            embedding,
+                        ),
+                    )
+
+                indexed_rows += 1
+
+            indexed_tables.append(table)
+
+        connection.commit()
+
+        return {
+            "tables": indexed_tables,
+            "indexed_rows": indexed_rows,
+        }
 
     except Exception:
         connection.rollback()
@@ -34,25 +163,43 @@ def store_document(content: str):
         connection.close()
 
 
-def search_documents(query: str, limit: int = 3):
+def search_documents(
+    query,
+    host,
+    port,
+    database,
+    user,
+    password,
+    limit=5,
+):
     """
-    Generate an embedding for the user's query and search
-    PostgreSQL for the most similar documents using pgvector.
+    Search the PostgreSQL pgvector index.
     """
 
     query_embedding = generate_embedding(query)
-    connection = get_connection()
+
+    connection = get_connection(
+        host=host,
+        port=port,
+        database=database,
+        user=user,
+        password=password,
+    )
 
     try:
+
         with connection.cursor() as cursor:
+
             cursor.execute(
                 """
                 SELECT
+                    source_table,
                     content,
-                    1 - (embedding <=> %s::vector) AS similarity
-                FROM documents
+                    1 - (embedding <=> %s::vector)
+                    AS similarity
+                FROM rag_documents
                 ORDER BY embedding <=> %s::vector
-                LIMIT %s
+                LIMIT %s;
                 """,
                 (
                     query_embedding,
@@ -67,70 +214,89 @@ def search_documents(query: str, limit: int = 3):
         connection.close()
 
 
-def generate_answer(question: str, context: str) -> str:
+def answer_question(
+    question,
+    host,
+    port,
+    database,
+    user,
+    password,
+    model,
+):
     """
-    Send the retrieved document context and user's question
-    to the Ollama model.
+    Complete RAG pipeline.
     """
 
-    prompt = f"""
-You are a helpful RAG assistant.
-
-Answer the user's question using ONLY the provided context.
-
-If the answer is not present in the context, say:
-"I don't have enough information in the provided documents."
-
-Context:
-{context}
-
-Question:
-{question}
-
-Answer:
-"""
-
-    response = requests.post(
-        f"{settings.ollama_host}/api/generate",
-        json={
-            "model": settings.ollama_model,
-            "prompt": prompt,
-            "stream": False,
-        },
-        timeout=120,
+    results = search_documents(
+        query=question,
+        host=host,
+        port=port,
+        database=database,
+        user=user,
+        password=password,
     )
-
-    response.raise_for_status()
-
-    response_data = response.json()
-
-    return response_data["response"]
-
-
-def answer_question(question: str) -> str:
-    """
-    Complete RAG pipeline:
-
-    1. Receive user's question
-    2. Generate query embedding
-    3. Search PostgreSQL using pgvector
-    4. Retrieve the most relevant documents
-    5. Build context from retrieved documents
-    6. Send context + question to Ollama
-    7. Return the generated answer
-    """
-
-    results = search_documents(question)
 
     if not results:
-        return "I don't have enough information in the provided documents."
 
-    context = "\n\n".join(
-        content
-        for content, similarity in results
+        return {
+            "answer":
+                "I don't have enough information "
+                "in the indexed PostgreSQL data.",
+            "sources": [],
+        }
+
+    context_blocks = []
+
+    sources = []
+
+    for source_table, content, similarity in results:
+
+        context_blocks.append(content)
+
+        sources.append(
+            {
+                "table": source_table,
+                "similarity": round(
+                    float(similarity),
+                    4,
+                ),
+                "content": content,
+            }
+        )
+
+    context = "\n\n---\n\n".join(
+        context_blocks
     )
 
-    return generate_answer(
-        question=question,
-        context=context,
+    prompt = f"""
+You are an enterprise PostgreSQL RAG assistant.
+
+Your job is to answer questions using ONLY the PostgreSQL
+database context supplied below.
+
+Do not invent values.
+
+If the requested information does not exist in the supplied
+context, clearly say that the indexed database does not contain
+enough information to answer.
+
+PostgreSQL Context:
+-------------------
+{context}
+
+User Question:
+--------------
+{question}
+
+Provide a clear and concise answer.
+"""
+
+    answer = generate_answer(
+        prompt=prompt,
+        model=model,
     )
+
+    return {
+        "answer": answer,
+        "sources": sources,
+    }

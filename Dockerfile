@@ -30,6 +30,7 @@ RUN pip install \
     -r requirements.txt
 
 COPY app ./app
+COPY frontend.py .
 COPY documents ./documents
 COPY postgres ./postgres
 
@@ -39,5 +40,6 @@ RUN useradd --create-home --shell /bin/bash appuser \
 USER appuser
 
 EXPOSE 8000
+EXPOSE 8501
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

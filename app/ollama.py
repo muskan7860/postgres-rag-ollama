@@ -1,25 +1,12 @@
-import requests
-
-from app.config import settings
+from sentence_transformers import SentenceTransformer
 
 
-def generate_answer(prompt: str) -> str:
-    url = f"{settings.ollama_host}/api/generate"
+MODEL_NAME = "all-MiniLM-L6-v2"
 
-    payload = {
-        "model": settings.ollama_model,
-        "prompt": prompt,
-        "stream": False,
-    }
+_model = SentenceTransformer(MODEL_NAME)
 
-    response = requests.post(
-        url,
-        json=payload,
-        timeout=120,
-    )
 
-    response.raise_for_status()
+def generate_embedding(text: str) -> list[float]:
+    embedding = _model.encode(text)
 
-    data = response.json()
-
-    return data["response"]
+    return embedding.tolist()

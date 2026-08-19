@@ -1,5 +1,6 @@
 fastapi
 uvicorn[standard]
+streamlit
 psycopg2-binary
 pgvector
 numpy
