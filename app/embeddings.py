@@ -4,13 +4,6 @@ from app.config import settings
 
 
 def generate_embedding(text: str) -> list[float]:
-    """
-    Generate embeddings using the Ollama embedding model.
-
-    This avoids PyTorch and sentence-transformers
-    inside the application container.
-    """
-
     url = f"{settings.ollama_host}/api/embed"
 
     payload = {
