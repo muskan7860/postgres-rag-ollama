@@ -6,40 +6,70 @@ ENV PIP_DEFAULT_TIMEOUT=300
 
 WORKDIR /app
 
-# PostgreSQL runtime library
+
+# ==========================================================
+# RUNTIME SYSTEM DEPENDENCIES
+# ==========================================================
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
+
+# ==========================================================
+# PYTHON DEPENDENCIES
+#
+# requirements.txt is copied separately so Docker/Kaniko
+# can reuse this layer when only application code changes.
+# ==========================================================
+
 COPY requirements.txt .
 
-# Install CPU-only PyTorch
 RUN pip install \
     --no-cache-dir \
     --timeout 300 \
-    --retries 10 \
-    --index-url https://download.pytorch.org/whl/cpu \
-    torch
-
-# Install remaining application dependencies
-RUN pip install \
-    --no-cache-dir \
-    --timeout 300 \
-    --retries 10 \
+    --retries 5 \
     -r requirements.txt
+
+
+# ==========================================================
+# APPLICATION
+# ==========================================================
 
 COPY app ./app
 COPY frontend.py .
 COPY documents ./documents
 COPY postgres ./postgres
 
-RUN useradd --create-home --shell /bin/bash appuser \
+
+# ==========================================================
+# NON-ROOT USER
+# ==========================================================
+
+RUN useradd \
+      --create-home \
+      --shell /bin/bash \
+      appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
 
+
+# FastAPI
 EXPOSE 8000
+
+# Streamlit
 EXPOSE 8501
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Default container command.
+# Kubernetes overrides this for the Streamlit container.
+CMD [
+    "uvicorn",
+    "app.main:app",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "8000"
+]

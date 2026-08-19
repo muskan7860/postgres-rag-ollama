@@ -1,12 +1,31 @@
-from sentence_transformers import SentenceTransformer
+import requests
 
-
-MODEL_NAME = "all-MiniLM-L6-v2"
-
-_model = SentenceTransformer(MODEL_NAME)
+from app.config import settings
 
 
 def generate_embedding(text: str) -> list[float]:
-    embedding = _model.encode(text)
+    """
+    Generate embeddings using the Ollama embedding model.
 
-    return embedding.tolist()
+    This avoids PyTorch and sentence-transformers
+    inside the application container.
+    """
+
+    url = f"{settings.ollama_host}/api/embed"
+
+    payload = {
+        "model": settings.ollama_embedding_model,
+        "input": text,
+    }
+
+    response = requests.post(
+        url,
+        json=payload,
+        timeout=120,
+    )
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    return data["embeddings"][0]

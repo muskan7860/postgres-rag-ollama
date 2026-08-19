@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Ollama Kubernetes service
     ollama_host: str = "http://ollama:11434"
     ollama_model: str = "llama3.2:3b"
+    ollama_embedding_model: str = "all-minilm"
 
     model_config = SettingsConfigDict(
         env_file=".env",

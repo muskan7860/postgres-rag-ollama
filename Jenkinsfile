@@ -1,7 +1,7 @@
 pipeline {
 
     // ==========================================================
-    // JENKINS KUBERNETES AGENT
+    // KUBERNETES JENKINS AGENT
     // ==========================================================
 
     agent {
@@ -18,12 +18,14 @@ spec:
 
   containers:
 
+
     # ==========================================================
     # KANIKO
-    # Builds and pushes Docker images without Docker daemon
+    # Build and push application image
     # ==========================================================
 
     - name: kaniko
+
       image: gcr.io/kaniko-project/executor:v1.23.2-debug
 
       command:
@@ -32,27 +34,31 @@ spec:
       tty: true
 
       resources:
+
         requests:
           memory: "512Mi"
           cpu: "250m"
 
         limits:
-          memory: "4Gi"
+          memory: "3Gi"
           cpu: "2"
 
       volumeMounts:
+
         - name: docker-config
           mountPath: /kaniko/.docker
 
 
     # ==========================================================
     # GIT
+    #
     # Used for:
-    # 1. Updating GitOps repository
-    # 2. Sending Slack webhook using curl
+    # - GitOps repository
+    # - Slack webhook via curl
     # ==========================================================
 
     - name: git
+
       image: alpine/git:latest
 
       command:
@@ -61,6 +67,7 @@ spec:
       tty: true
 
       resources:
+
         requests:
           memory: "64Mi"
           cpu: "50m"
@@ -83,7 +90,7 @@ spec:
 
 
     // ==========================================================
-    // GLOBAL ENVIRONMENT VARIABLES
+    // ENVIRONMENT
     // ==========================================================
 
     environment {
@@ -100,7 +107,7 @@ spec:
 
 
     // ==========================================================
-    // PIPELINE STAGES
+    // PIPELINE
     // ==========================================================
 
     stages {
@@ -138,10 +145,10 @@ spec:
 
 
                             AUTH=$(printf "%s:%s" \
-                              "$DOCKER_USERNAME" \
-                              "$DOCKER_PASSWORD" \
-                              | base64 \
-                              | tr -d '\\n')
+                                "$DOCKER_USERNAME" \
+                                "$DOCKER_PASSWORD" \
+                                | base64 \
+                                | tr -d '\\n')
 
 
                             cat > /kaniko/.docker/config.json <<EOF
@@ -159,37 +166,31 @@ EOF
                             echo "BUILDING DOCKER IMAGE"
                             echo "=========================================="
 
-                            echo "Build Number: $BUILD_NUMBER"
+                            echo "Build Number : $BUILD_NUMBER"
 
-                            echo ""
-                            echo "Docker Image:"
-                            echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
-                            echo ""
+                            echo "Image        : docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
 
 
                             /kaniko/executor \
-                              --context="$WORKSPACE" \
-                              --dockerfile="$WORKSPACE/Dockerfile" \
-                              --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER" \
-                              --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest" \
-                              --cache=true \
-                              --cache-ttl=24h
+                                --context="$WORKSPACE" \
+                                --dockerfile="$WORKSPACE/Dockerfile" \
+                                --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER" \
+                                --destination="docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest" \
+                                --snapshot-mode=redo \
+                                --cache=false
 
 
                             echo "=========================================="
                             echo "DOCKER IMAGE PUSHED SUCCESSFULLY"
                             echo "=========================================="
 
-                            echo ""
-                            echo "Versioned Image:"
+                            echo "Version:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:$BUILD_NUMBER"
 
                             echo ""
 
-                            echo "Latest Image:"
+                            echo "Latest:"
                             echo "docker.io/$DOCKER_USERNAME/postgres-rag-ollama:latest"
-
-                            echo ""
                         '''
                     }
                 }
@@ -199,7 +200,7 @@ EOF
 
         // ======================================================
         // STAGE 2
-        // UPDATE GITOPS REPOSITORY
+        // UPDATE GITOPS
         // ======================================================
 
         stage('Update GitOps') {
@@ -229,18 +230,20 @@ EOF
 
 
                             git clone \
-                              https://$GIT_USERNAME:$GIT_TOKEN@github.com/muskan7860/postgres-rag-ollama-gitops.git \
-                              postgres-rag-ollama-gitops
+                                https://$GIT_USERNAME:$GIT_TOKEN@github.com/muskan7860/postgres-rag-ollama-gitops.git \
+                                postgres-rag-ollama-gitops
 
 
                             cd postgres-rag-ollama-gitops
 
 
                             echo "=========================================="
-                            echo "CURRENT KUBERNETES IMAGE"
+                            echo "CURRENT APPLICATION IMAGES"
                             echo "=========================================="
 
-                            grep "image:" app-deployment.yaml || true
+                            grep "postgres-rag-ollama:" \
+                                app-deployment.yaml \
+                                || true
 
 
                             echo "=========================================="
@@ -248,60 +251,55 @@ EOF
                             echo "=========================================="
 
                             sed -i \
-                              "s|image:.*postgres-rag-ollama:.*|image: docker.io/muskanpatel71198/postgres-rag-ollama:$BUILD_NUMBER|g" \
-                              app-deployment.yaml
+                                "s|image:.*postgres-rag-ollama:.*|image: docker.io/muskanpatel71198/postgres-rag-ollama:$BUILD_NUMBER|g" \
+                                app-deployment.yaml
 
 
                             echo "=========================================="
-                            echo "UPDATED KUBERNETES IMAGE"
+                            echo "UPDATED APPLICATION IMAGES"
                             echo "=========================================="
 
-                            grep "image:" app-deployment.yaml
+                            grep "postgres-rag-ollama:" \
+                                app-deployment.yaml
 
 
-                            echo "=========================================="
-                            echo "CONFIGURING GIT"
-                            echo "=========================================="
+                            git config \
+                                user.name \
+                                "Jenkins CI"
 
-                            git config user.name "Jenkins CI"
-
-                            git config user.email "jenkins@localhost"
-
-
-                            echo "=========================================="
-                            echo "GIT STATUS"
-                            echo "=========================================="
-
-                            git status
+                            git config \
+                                user.email \
+                                "jenkins@localhost"
 
 
-                            echo "=========================================="
-                            echo "COMMITTING GITOPS CHANGE"
-                            echo "=========================================="
-
-                            git add app-deployment.yaml
+                            git add \
+                                app-deployment.yaml
 
 
-                            git commit \
-                              -m "Update postgres-rag-ollama image to build $BUILD_NUMBER" \
-                              || echo "No changes to commit"
+                            if git diff \
+                                --cached \
+                                --quiet
+                            then
 
+                                echo "No GitOps image changes required."
 
-                            echo "=========================================="
-                            echo "PUSHING GITOPS CHANGE"
-                            echo "=========================================="
+                            else
 
-                            git push origin main
+                                git commit \
+                                    -m "Update postgres-rag-ollama image to build $BUILD_NUMBER"
+
+                                git push \
+                                    origin \
+                                    main
+
+                            fi
 
 
                             echo "=========================================="
                             echo "GITOPS UPDATE SUCCESSFUL"
                             echo "=========================================="
 
-                            echo ""
-                            echo "Argo CD will detect this Git change"
-                            echo "and automatically synchronize Kubernetes."
-                            echo ""
+                            echo "Argo CD will reconcile build $BUILD_NUMBER."
                         '''
                     }
                 }
@@ -328,15 +326,11 @@ EOF
 CI/CD PIPELINE SUCCESS
 ==========================================
 
-Docker image built successfully.
+Docker Image : SUCCESS
+Docker Push  : SUCCESS
+GitOps       : SUCCESS
 
-Docker image pushed successfully.
-
-GitOps repository updated successfully.
-
-Argo CD will automatically detect
-the GitOps change and synchronize
-the Kubernetes application.
+Argo CD will synchronize automatically.
 
 ==========================================
 '''
@@ -346,14 +340,8 @@ the Kubernetes application.
 
                 try {
 
-                    echo "Sending SUCCESS notification to Slack via webhook..."
+                    echo "Sending SUCCESS notification to Slack..."
 
-
-                    // --------------------------------------------------
-                    // Reuse existing GIT container.
-                    // This avoids the previous durable-task problem
-                    // from the separate Slack container.
-                    // --------------------------------------------------
 
                     container('git') {
 
@@ -368,55 +356,42 @@ the Kubernetes application.
 
                             sh '''
                                 set -e
-
-                                # Prevent secret values from being echoed
                                 set +x
 
 
-                                # ------------------------------------------
-                                # Install curl only if it is not available
-                                # ------------------------------------------
+                                if ! command -v curl >/dev/null 2>&1
+                                then
 
-                                if ! command -v curl >/dev/null 2>&1; then
-
-                                    echo "Installing curl for Slack notification..."
-
-                                    apk add --no-cache curl >/dev/null 2>&1
+                                    apk add \
+                                        --no-cache \
+                                        curl \
+                                        >/dev/null 2>&1
 
                                 fi
 
 
-                                echo "Sending Slack SUCCESS webhook..."
-
-
-                                # ------------------------------------------
-                                # Send Slack webhook
-                                # ------------------------------------------
-
                                 cat <<EOF | curl \
-                                  --fail \
-                                  --silent \
-                                  --show-error \
-                                  --connect-timeout 15 \
-                                  --max-time 30 \
-                                  -X POST \
-                                  -H 'Content-Type: application/json' \
-                                  --data-binary @- \
-                                  "$SLACK_WEBHOOK"
+                                    --fail \
+                                    --silent \
+                                    --show-error \
+                                    --connect-timeout 15 \
+                                    --max-time 30 \
+                                    -H 'Content-Type: application/json' \
+                                    --data-binary @- \
+                                    "$SLACK_WEBHOOK"
 {
-  "text": "✅ *CI/CD PIPELINE SUCCESS*\\n\\n*Application:* postgres-rag-ollama\\n*Build:* #${BUILD_NUMBER}\\n*Status:* SUCCESS\\n\\n*Docker Image:*\\ndocker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n\\n*Docker Hub:* Image built and pushed successfully.\\n\\n*GitOps:* app-deployment.yaml updated successfully.\\n\\n*Argo CD:* Automatic synchronization triggered.\\n\\n*Jenkins Build:* ${BUILD_URL}"
+  "text": "✅ *POSTGRES RAG OLLAMA - DEPLOYMENT SUCCESS*\\n\\n*Build:* #${BUILD_NUMBER}\\n*Image:* docker.io/muskanpatel71198/postgres-rag-ollama:${BUILD_NUMBER}\\n*Docker:* Pushed successfully\\n*GitOps:* Updated successfully\\n*Argo CD:* Automatic synchronization initiated\\n*Build URL:* ${BUILD_URL}"
 }
 EOF
 
 
-                                echo ""
                                 echo "Slack SUCCESS webhook completed."
                             '''
                         }
                     }
 
 
-                    echo "Slack SUCCESS notification sent successfully."
+                    echo "Slack SUCCESS notification sent."
 
                 }
 
@@ -424,14 +399,8 @@ EOF
 
                     echo "=========================================="
                     echo "WARNING: Slack notification failed."
-                    echo "=========================================="
-
-                    echo "CI/CD deployment itself was successful."
-
-                    echo "Slack failure will NOT mark pipeline failed."
-
+                    echo "Deployment itself was successful."
                     echo "Slack error: ${e.getMessage()}"
-
                     echo "=========================================="
                 }
             }
@@ -459,7 +428,7 @@ Check Jenkins console output.
 
                 try {
 
-                    echo "Sending FAILURE notification to Slack via webhook..."
+                    echo "Sending FAILURE notification to Slack..."
 
 
                     container('git') {
@@ -475,68 +444,51 @@ Check Jenkins console output.
 
                             sh '''
                                 set -e
-
-                                # Prevent sensitive values appearing in logs
                                 set +x
 
 
-                                # ------------------------------------------
-                                # Install curl if required
-                                # ------------------------------------------
+                                if ! command -v curl >/dev/null 2>&1
+                                then
 
-                                if ! command -v curl >/dev/null 2>&1; then
-
-                                    echo "Installing curl for Slack notification..."
-
-                                    apk add --no-cache curl >/dev/null 2>&1
+                                    apk add \
+                                        --no-cache \
+                                        curl \
+                                        >/dev/null 2>&1
 
                                 fi
 
 
-                                echo "Sending Slack FAILURE webhook..."
-
-
-                                # ------------------------------------------
-                                # Send failure notification
-                                # ------------------------------------------
-
                                 cat <<EOF | curl \
-                                  --fail \
-                                  --silent \
-                                  --show-error \
-                                  --connect-timeout 15 \
-                                  --max-time 30 \
-                                  -X POST \
-                                  -H 'Content-Type: application/json' \
-                                  --data-binary @- \
-                                  "$SLACK_WEBHOOK"
+                                    --fail \
+                                    --silent \
+                                    --show-error \
+                                    --connect-timeout 15 \
+                                    --max-time 30 \
+                                    -H 'Content-Type: application/json' \
+                                    --data-binary @- \
+                                    "$SLACK_WEBHOOK"
 {
-  "text": "❌ *CI/CD PIPELINE FAILED*\\n\\n*Application:* postgres-rag-ollama\\n*Build:* #${BUILD_NUMBER}\\n*Status:* FAILED\\n\\n*Action:* Please check Jenkins console logs.\\n\\n*Jenkins Build:* ${BUILD_URL}"
+  "text": "❌ *POSTGRES RAG OLLAMA - PIPELINE FAILED*\\n\\n*Build:* #${BUILD_NUMBER}\\n*Status:* FAILED\\n*Action:* Check Jenkins console logs\\n*Build URL:* ${BUILD_URL}"
 }
 EOF
 
 
-                                echo ""
                                 echo "Slack FAILURE webhook completed."
                             '''
                         }
                     }
 
 
-                    echo "Slack FAILURE notification sent successfully."
+                    echo "Slack FAILURE notification sent."
 
                 }
 
                 catch (Exception e) {
 
                     echo "=========================================="
-                    echo "WARNING: Slack failure notification failed."
-                    echo "=========================================="
-
-                    echo "Original CI/CD failure remains unchanged."
-
+                    echo "WARNING: Slack notification failed."
+                    echo "Original pipeline error is unchanged."
                     echo "Slack error: ${e.getMessage()}"
-
                     echo "=========================================="
                 }
             }
