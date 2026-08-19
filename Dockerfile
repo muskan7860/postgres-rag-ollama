@@ -6,7 +6,6 @@ ENV PIP_DEFAULT_TIMEOUT=300
 
 WORKDIR /app
 
-
 # ==========================================================
 # RUNTIME SYSTEM DEPENDENCIES
 # ==========================================================
@@ -19,9 +18,6 @@ RUN apt-get update \
 
 # ==========================================================
 # PYTHON DEPENDENCIES
-#
-# requirements.txt is copied separately so Docker/Kaniko
-# can reuse this layer when only application code changes.
 # ==========================================================
 
 COPY requirements.txt .
@@ -34,7 +30,7 @@ RUN pip install \
 
 
 # ==========================================================
-# APPLICATION
+# APPLICATION FILES
 # ==========================================================
 
 COPY app ./app
@@ -47,29 +43,23 @@ COPY postgres ./postgres
 # NON-ROOT USER
 # ==========================================================
 
-RUN useradd \
-      --create-home \
-      --shell /bin/bash \
-      appuser \
+RUN useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app
 
 USER appuser
 
 
-# FastAPI
-EXPOSE 8000
+# ==========================================================
+# PORTS
+# ==========================================================
 
-# Streamlit
+EXPOSE 8000
 EXPOSE 8501
 
 
-# Default container command.
-# Kubernetes overrides this for the Streamlit container.
-CMD [
-    "uvicorn",
-    "app.main:app",
-    "--host",
-    "0.0.0.0",
-    "--port",
-    "8000"
-]
+# ==========================================================
+# DEFAULT BACKEND COMMAND
+# Kubernetes overrides this for Streamlit frontend container.
+# ==========================================================
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
